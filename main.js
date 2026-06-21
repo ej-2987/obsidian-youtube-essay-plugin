@@ -324,14 +324,15 @@ async function callGemini(cfg, system, user, maxTokens) {
   }
   return text;
 }
-var AEON_SYSTEM = `You are a staff writer for Aeon Magazine. Your task is to retell the ideas from a video transcript in Aeon's distinctive voice \u2014 literary, unhurried, intellectually curious \u2014 without adding, padding, or repeating content.
+var AEON_SYSTEM = `You are a staff writer for Aeon Magazine. Your task is to retell the ideas in a video transcript in Aeon's distinctive voice \u2014 literary, unhurried, intellectually curious.
 
 Rules:
 - Follow the video's own logic and sequence of ideas. Do not invent a new argument structure.
-- Write only as much as the content warrants. Never repeat a point already made.
-- Ground abstract ideas in concrete experience. Use vivid prose, not academic summary.
+- Cover ALL the ideas in your assigned transcript excerpt. Do not skip or compress content \u2014 if the video spent time on it, the essay must too.
+- Never repeat a point already made in a previous section.
+- Ground abstract ideas in concrete human experience. Use vivid prose, not academic summary.
 - Subheadings should be evocative phrases that reflect what the section actually covers, not generic labels.
-- Do not pad to reach a word count. Shorter and precise beats longer and repetitive.`;
+- Write as much as the content requires \u2014 a long video deserves a long essay. Do not cut ideas short.`;
 var NYPHILOSOPHER_SYSTEM = `\uB2F9\uC2E0\uC740 \u300A\uB274 \uD544\uB85C\uC18C\uD37C(New Philosopher)\u300B \uD55C\uAD6D\uC5B4\uD310 \uCCA0\uD559 \uC5D0\uC138\uC774 \uC791\uAC00\uC785\uB2C8\uB2E4.
 
 \uC5ED\uD560: \uC601\uC0C1 \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8\uC758 \uB0B4\uC6A9\uC744 \uB274\uD544\uB85C\uC18C\uD37C \uBB38\uCCB4\uB85C \uB2E4\uC2DC \uC4F0\uB294 \uAC83. \uB0B4\uC6A9\uC744 \uCC3D\uC791\uD558\uAC70\uB098 \uBD80\uD480\uB9AC\uB294 \uAC83\uC774 \uC544\uB2D9\uB2C8\uB2E4.
@@ -354,33 +355,33 @@ async function buildOutline(cfg, transcript, lang, sourceTitle, onStatus) {
       );
       const s = await llmCall(
         cfg,
-        lang === "en" ? "You are a precise summariser. Capture the flow of ideas faithfully without inventing or padding." : "\uB2F9\uC2E0\uC740 \uC815\uD655\uD55C \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uD750\uB984\uC744 \uCDA9\uC2E4\uD788 \uB2F4\uB418 \uCD94\uAC00\uD558\uAC70\uB098 \uBD80\uD480\uB9AC\uC9C0 \uB9C8\uC138\uC694.",
-        lang === "en" ? `Summarise this transcript excerpt (part ${i + 1}/${chunks.length}) in 300\u2013400 words. Follow its actual sequence of ideas:
+        lang === "en" ? "You are a precise summariser. Your goal is to preserve every distinct topic and argument so nothing is lost when the summary is later used to write an essay." : "\uB2F9\uC2E0\uC740 \uC815\uD655\uD55C \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC774\uD6C4 \uC5D0\uC138\uC774 \uC791\uC131\uC5D0 \uC4F0\uC77C \uC694\uC57D\uC774\uBBC0\uB85C, \uBAA8\uB4E0 \uAC1C\uBCC4 \uC8FC\uC81C\uC640 \uB17C\uC810\uC774 \uC190\uC2E4 \uC5C6\uC774 \uBCF4\uC874\uB418\uC5B4\uC57C \uD569\uB2C8\uB2E4.",
+        lang === "en" ? `Summarise this transcript excerpt (part ${i + 1}/${chunks.length}). List every topic covered in order, with enough detail to reconstruct the ideas later. Aim for 500\u2013600 words:
 
-${chunks[i]}` : `\uB2E4\uC74C \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uC870\uAC01(${i + 1}/${chunks.length}\uBC88\uC9F8)\uC744 \uC2E4\uC81C \uC804\uAC1C \uC21C\uC11C\uB300\uB85C 400\uC790 \uC774\uB0B4\uB85C \uC694\uC57D\uD558\uC138\uC694:
+${chunks[i]}` : `\uB2E4\uC74C \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uC870\uAC01(${i + 1}/${chunks.length}\uBC88\uC9F8)\uC744 \uC694\uC57D\uD558\uC138\uC694. \uB2E4\uB8E8\uB294 \uBAA8\uB4E0 \uC8FC\uC81C\uB97C \uC21C\uC11C\uB300\uB85C, \uB098\uC911\uC5D0 \uC7AC\uAD6C\uC131\uD560 \uC218 \uC788\uC744 \uB9CC\uD07C \uCDA9\uBD84\uD55C \uC138\uBD80 \uB0B4\uC6A9\uACFC \uD568\uAED8 \uC791\uC131\uD558\uC138\uC694. 600~800\uC790 \uBAA9\uD45C:
 
 ${chunks[i]}`,
-        600
+        900
       );
       summaries.push(s);
     }
     condensed = summaries.join("\n\n---\n\n");
   }
   onStatus(lang === "en" ? "Building essay outline\u2026" : "\uC5D0\uC138\uC774 \uAC1C\uC694 \uAD6C\uC131 \uC911\u2026");
-  const prompt = lang === "en" ? `Map the structure of the video "${sourceTitle}" into an essay outline. Reflect the video's ACTUAL progression \u2014 do not invent new sections or themes not in the source.
+  const prompt = lang === "en" ? `Read the transcript below and map it into an Aeon essay outline. The outline must mirror the VIDEO'S actual structure and sequence \u2014 do not invent themes or merge/skip distinct ideas.
 
 Output ONLY lines in the format  KEY:: value  (one per line, no markdown, no extra text).
 
-TITLE:: a literary essay title that reflects the video's core idea
-INTRO:: one sentence: what scene or question opens the essay
-SECTION_1_TITLE:: evocative subheading matching what the video actually covers first
-SECTION_1_SUMMARY:: what this section covers (one sentence, drawn from the transcript)
+TITLE:: a literary essay title capturing the video's core idea
+INTRO:: one sentence: the opening hook or scene
+SECTION_1_TITLE:: evocative subheading for what the video covers first
+SECTION_1_SUMMARY:: specific content this section covers (one sentence)
 SECTION_2_TITLE:: ...
 SECTION_2_SUMMARY:: ...
-(continue for as many sections as the video's natural structure warrants \u2014 typically 3\u20136)
+... (keep adding sections until ALL topics in the transcript are accounted for)
 CONCLUSION:: one sentence: how the essay closes
 
-Use only as many sections as the video actually needs. Do not add sections to fill space.
+How many sections: decide based on how many distinct topics the video covers. A 10-minute video might need 3\u20134 sections. A 30-minute video typically needs 6\u20138. A 60-minute video may need 10 or more. Never merge unrelated topics into one section just to reduce the count. Every major idea in the transcript must appear in a section summary.
 
 TRANSCRIPT:
 ${condensed}` : `\uC601\uC0C1 "${sourceTitle}"\uC758 \uC2E4\uC81C \uC804\uAC1C \uD750\uB984\uC744 \uC5D0\uC138\uC774 \uAC1C\uC694\uB85C \uC62E\uAE30\uC138\uC694. \uC601\uC0C1\uC5D0 \uC5C6\uB294 \uC0C8\uB85C\uC6B4 \uC139\uC158\uC774\uB098 \uC8FC\uC81C\uB97C \uB9CC\uB4E4\uC9C0 \uB9C8\uC138\uC694.
@@ -407,22 +408,28 @@ async function writeSection(cfg, lang, outline, index, fullTranscript, prevText)
   var _a;
   const section = outline.sections[index];
   const n = outline.sections.length;
-  const excerptMax = 6e3;
-  const start = Math.floor(index / n * fullTranscript.length);
+  const excerptMax = 1e4;
+  const sliceSize = Math.ceil(fullTranscript.length / n);
+  const overlap = Math.ceil(sliceSize * 0.15);
+  const start = Math.max(0, Math.floor(index / n * fullTranscript.length) - overlap);
   const end = Math.min(start + excerptMax, fullTranscript.length);
   const excerpt = fullTranscript.slice(start, end);
   const prompt = lang === "en" ? `You are writing section ${index + 1} of ${n} for the Aeon essay titled "${outline.essayTitle}".
 
-OUTLINE:
+FULL OUTLINE (for context \u2014 each section covers only its own topic):
 ${outline.sections.map((s, i) => `${i + 1}. ${s.title}: ${s.summary}`).join("\n")}
 
-${prevText ? `PREVIOUS TEXT (last 600 chars \u2014 do NOT repeat any of this):
-\u2026${prevText.slice(-600)}
+${prevText ? `PREVIOUS TEXT (last 800 chars \u2014 do NOT repeat any of this):
+\u2026${prevText.slice(-800)}
 ` : ""}
 CURRENT SECTION: "${section.title}"
-${index === 0 ? "Open with a vivid hook \u2014 a scene, anecdote, or provocative question." : "Pick up naturally from where the previous section left off."}
+${index === 0 ? "Open with a vivid hook \u2014 a scene, anecdote, or provocative question that draws the reader in." : "Continue naturally from the previous section."}
 
-Rewrite the transcript content below in Aeon's literary voice. Cover what the transcript actually says here \u2014 no more, no less. Do not repeat points from previous sections. Output body text ONLY (no heading). End every sentence completely.
+Your job: rewrite the TRANSCRIPT EXCERPT below in Aeon's literary voice.
+- Cover EVERY idea and argument in the excerpt. Do not skip or compress anything that the video actually discusses.
+- Do NOT repeat ideas from previous sections.
+- Write as much as the excerpt requires \u2014 this is a long-form essay, not a summary.
+- Output body text ONLY (no heading). Every sentence must be complete.
 
 TRANSCRIPT EXCERPT FOR THIS SECTION:
 ${excerpt}` : `\uB274\uD544\uB85C\uC18C\uD37C \uC5D0\uC138\uC774 "${outline.essayTitle}"\uC758 ${index + 1}\uBC88\uC9F8 \uC139\uC158(\uC804\uCCB4 ${n}\uAC1C)\uC744 \uC791\uC131\uD569\uB2C8\uB2E4.
