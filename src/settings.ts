@@ -16,17 +16,49 @@ export interface YoutubeEssaySettings {
   defaultLanguage: EssayLanguage;
 }
 
+// ── Valid model lists (used for migration) ────────────────────────────────────
+export const VALID_CLAUDE_MODELS = [
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+];
+export const VALID_OPENAI_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-4o",
+  "gpt-4o-mini",
+];
+export const VALID_GEMINI_MODELS = [
+  "gemini-3.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  // gemini-2.0-flash 및 2.0-flash-lite 는 단종 — 목록에서 제거해 마이그레이션 강제 적용
+];
+
 export const DEFAULT_SETTINGS: YoutubeEssaySettings = {
   apiProvider: "claude",
   claudeApiKey: "",
-  claudeModel: "claude-opus-4-8",
+  claudeModel: "claude-haiku-4-5-20251001",
   openaiApiKey: "",
-  openaiModel: "gpt-4o",
+  openaiModel: "gpt-5.4-mini",
   geminiApiKey: "",
-  geminiModel: "gemini-2.0-flash",
+  geminiModel: "gemini-2.5-flash",
   outputFolder: "Essays",
   defaultLanguage: "ko",
 };
+
+// ── Migration: reset invalid saved model names to defaults ────────────────────
+export function migrateSettings(s: YoutubeEssaySettings): YoutubeEssaySettings {
+  if (!VALID_CLAUDE_MODELS.includes(s.claudeModel))
+    s.claudeModel = DEFAULT_SETTINGS.claudeModel;
+  if (!VALID_OPENAI_MODELS.includes(s.openaiModel))
+    s.openaiModel = DEFAULT_SETTINGS.openaiModel;
+  if (!VALID_GEMINI_MODELS.includes(s.geminiModel))
+    s.geminiModel = DEFAULT_SETTINGS.geminiModel;
+  return s;
+}
 
 export class YoutubeEssaySettingTab extends PluginSettingTab {
   plugin: YoutubeEssayPlugin;
@@ -42,115 +74,125 @@ export class YoutubeEssaySettingTab extends PluginSettingTab {
 
     containerEl.createEl("h2", { text: "YouTube Essay Generator" });
 
-    // ── API Provider ──────────────────────────────────────────────────────────
+    // ── Active Provider ───────────────────────────────────────────────────────
+    containerEl.createEl("h3", { text: "사용할 AI 제공자 / Active Provider" });
+
     new Setting(containerEl)
-      .setName("AI Provider")
-      .setDesc("Which AI service to use for essay generation")
+      .setName("Active Provider")
+      .setDesc("에세이 생성에 사용할 AI 서비스를 선택하세요")
       .addDropdown((drop) =>
         drop
-          .addOption("claude", "Claude (Anthropic)")
-          .addOption("openai", "OpenAI (GPT)")
-          .addOption("gemini", "Gemini (Google)")
+          .addOption("claude", "🟠 Claude (Anthropic)")
+          .addOption("openai", "🟢 OpenAI (GPT)")
+          .addOption("gemini", "🔵 Gemini (Google)")
           .setValue(this.plugin.settings.apiProvider)
           .onChange(async (value) => {
             this.plugin.settings.apiProvider = value as ApiProvider;
             await this.plugin.saveSettings();
-            this.display(); // re-render to show relevant fields
           })
       );
 
     // ── Claude ────────────────────────────────────────────────────────────────
-    if (this.plugin.settings.apiProvider === "claude") {
-      new Setting(containerEl)
-        .setName("Claude API Key")
-        .setDesc("From console.anthropic.com → API Keys")
-        .addText((text) =>
-          text
-            .setPlaceholder("sk-ant-…")
-            .setValue(this.plugin.settings.claudeApiKey)
-            .onChange(async (v) => {
-              this.plugin.settings.claudeApiKey = v.trim();
-              await this.plugin.saveSettings();
-            })
-        );
+    containerEl.createEl("h3", { text: "🟠 Claude (Anthropic)" });
 
-      new Setting(containerEl)
-        .setName("Claude Model")
-        .addDropdown((drop) =>
-          drop
-            .addOption("claude-opus-4-8", "Claude Opus 4.8 — best quality")
-            .addOption("claude-sonnet-4-6", "Claude Sonnet 4.6 — fast")
-            .addOption("claude-haiku-4-5-20251001", "Claude Haiku 4.5 — fastest")
-            .setValue(this.plugin.settings.claudeModel)
-            .onChange(async (v) => {
-              this.plugin.settings.claudeModel = v;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    new Setting(containerEl)
+      .setName("API Key")
+      .setDesc("console.anthropic.com → API Keys")
+      .addText((text) => {
+        text
+          .setPlaceholder("sk-ant-…")
+          .setValue(this.plugin.settings.claudeApiKey)
+          .onChange(async (v) => {
+            this.plugin.settings.claudeApiKey = v.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = "password";
+        text.inputEl.style.width = "100%";
+      });
+
+    new Setting(containerEl)
+      .setName("Model")
+      .addDropdown((drop) =>
+        drop
+          .addOption("claude-opus-4-8", "Opus 4.8 — 최고 품질")
+          .addOption("claude-sonnet-4-6", "Sonnet 4.6 — 균형")
+          .addOption("claude-haiku-4-5-20251001", "Haiku 4.5 — 빠름 / 저렴")
+          .setValue(this.plugin.settings.claudeModel)
+          .onChange(async (v) => {
+            this.plugin.settings.claudeModel = v;
+            await this.plugin.saveSettings();
+          })
+      );
 
     // ── OpenAI ────────────────────────────────────────────────────────────────
-    if (this.plugin.settings.apiProvider === "openai") {
-      new Setting(containerEl)
-        .setName("OpenAI API Key")
-        .setDesc("From platform.openai.com → API Keys")
-        .addText((text) =>
-          text
-            .setPlaceholder("sk-…")
-            .setValue(this.plugin.settings.openaiApiKey)
-            .onChange(async (v) => {
-              this.plugin.settings.openaiApiKey = v.trim();
-              await this.plugin.saveSettings();
-            })
-        );
+    containerEl.createEl("h3", { text: "🟢 OpenAI (GPT)" });
 
-      new Setting(containerEl)
-        .setName("OpenAI Model")
-        .addDropdown((drop) =>
-          drop
-            .addOption("gpt-4o", "GPT-4o — best quality")
-            .addOption("gpt-4o-mini", "GPT-4o mini — fast")
-            .addOption("o3-mini", "o3-mini — reasoning")
-            .setValue(this.plugin.settings.openaiModel)
-            .onChange(async (v) => {
-              this.plugin.settings.openaiModel = v;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    new Setting(containerEl)
+      .setName("API Key")
+      .setDesc("platform.openai.com → API Keys")
+      .addText((text) => {
+        text
+          .setPlaceholder("sk-…")
+          .setValue(this.plugin.settings.openaiApiKey)
+          .onChange(async (v) => {
+            this.plugin.settings.openaiApiKey = v.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = "password";
+        text.inputEl.style.width = "100%";
+      });
+
+    new Setting(containerEl)
+      .setName("Model")
+      .addDropdown((drop) =>
+        drop
+          .addOption("gpt-5.5", "GPT-5.5 — 최고 품질")
+          .addOption("gpt-5.4", "GPT-5.4 — 균형")
+          .addOption("gpt-5.4-mini", "GPT-5.4 mini — 빠름 / 저렴")
+          .addOption("gpt-4o", "GPT-4o — 구버전")
+          .addOption("gpt-4o-mini", "GPT-4o mini — 구버전")
+          .setValue(this.plugin.settings.openaiModel)
+          .onChange(async (v) => {
+            this.plugin.settings.openaiModel = v;
+            await this.plugin.saveSettings();
+          })
+      );
 
     // ── Gemini ────────────────────────────────────────────────────────────────
-    if (this.plugin.settings.apiProvider === "gemini") {
-      new Setting(containerEl)
-        .setName("Gemini API Key")
-        .setDesc("From aistudio.google.com → Get API Key")
-        .addText((text) =>
-          text
-            .setPlaceholder("AIza…")
-            .setValue(this.plugin.settings.geminiApiKey)
-            .onChange(async (v) => {
-              this.plugin.settings.geminiApiKey = v.trim();
-              await this.plugin.saveSettings();
-            })
-        );
+    containerEl.createEl("h3", { text: "🔵 Gemini (Google)" });
 
-      new Setting(containerEl)
-        .setName("Gemini Model")
-        .addDropdown((drop) =>
-          drop
-            .addOption("gemini-2.5-pro-preview-06-05", "Gemini 2.5 Pro — best quality")
-            .addOption("gemini-2.0-flash", "Gemini 2.0 Flash — fast")
-            .addOption("gemini-2.0-flash-lite", "Gemini 2.0 Flash-Lite — fastest")
-            .setValue(this.plugin.settings.geminiModel)
-            .onChange(async (v) => {
-              this.plugin.settings.geminiModel = v;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    new Setting(containerEl)
+      .setName("API Key")
+      .setDesc("aistudio.google.com → Get API Key")
+      .addText((text) => {
+        text
+          .setPlaceholder("AIza…")
+          .setValue(this.plugin.settings.geminiApiKey)
+          .onChange(async (v) => {
+            this.plugin.settings.geminiApiKey = v.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = "password";
+        text.inputEl.style.width = "100%";
+      });
+
+    new Setting(containerEl)
+      .setName("Model")
+      .addDropdown((drop) =>
+        drop
+          .addOption("gemini-3.5-flash", "Gemini 3.5 Flash — 최신")
+          .addOption("gemini-2.5-pro", "Gemini 2.5 Pro — 최고 품질")
+          .addOption("gemini-2.5-flash", "Gemini 2.5 Flash — 균형")
+          .addOption("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite — 저렴")
+          .setValue(this.plugin.settings.geminiModel)
+          .onChange(async (v) => {
+            this.plugin.settings.geminiModel = v;
+            await this.plugin.saveSettings();
+          })
+      );
 
     // ── General ───────────────────────────────────────────────────────────────
-    containerEl.createEl("h3", { text: "General" });
+    containerEl.createEl("h3", { text: "일반 설정 / General" });
 
     new Setting(containerEl)
       .setName("Default Language / Style")
@@ -167,7 +209,7 @@ export class YoutubeEssaySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Output Folder")
-      .setDesc("Vault folder where generated essays are saved (created if absent)")
+      .setDesc("에세이가 저장될 Vault 폴더 (없으면 자동 생성)")
       .addText((text) =>
         text
           .setPlaceholder("Essays")

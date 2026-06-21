@@ -1,5 +1,5 @@
 import { Plugin, Notice } from "obsidian";
-import { YoutubeEssaySettings, DEFAULT_SETTINGS, YoutubeEssaySettingTab } from "./settings";
+import { YoutubeEssaySettings, DEFAULT_SETTINGS, YoutubeEssaySettingTab, migrateSettings } from "./settings";
 import { YoutubeEssayModal } from "./modal";
 
 export default class YoutubeEssayPlugin extends Plugin {
@@ -37,7 +37,9 @@ export default class YoutubeEssayPlugin extends Plugin {
   onunload() {}
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings = migrateSettings(saved);
+    await this.saveData(this.settings); // persist migrated values
   }
 
   async saveSettings() {
