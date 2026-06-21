@@ -163,7 +163,8 @@ var import_obsidian2 = require("obsidian");
 var QUALITY_PARAMS = {
   quick: {
     excerptMaxChars: 5e3,
-    overlapRatio: 0.1,
+    overlapRatio: 0,
+    // no overlap — overlap causes duplicate content
     chunkSummaryTokens: 500,
     outlineMaxTokens: 2048,
     maxSections: 5,
@@ -171,7 +172,7 @@ var QUALITY_PARAMS = {
   },
   balanced: {
     excerptMaxChars: 7500,
-    overlapRatio: 0.15,
+    overlapRatio: 0,
     chunkSummaryTokens: 700,
     outlineMaxTokens: 3e3,
     maxSections: 8,
@@ -179,7 +180,7 @@ var QUALITY_PARAMS = {
   },
   thorough: {
     excerptMaxChars: 1e4,
-    overlapRatio: 0.15,
+    overlapRatio: 0,
     chunkSummaryTokens: 900,
     outlineMaxTokens: 4096,
     maxSections: 12,
@@ -444,47 +445,47 @@ ${condensed}`;
   }
   return outline;
 }
-async function writeSection(cfg, lang, outline, index, fullTranscript, prevText, qp) {
+async function writeSection(cfg, lang, outline, index, fullTranscript, completedSections, qp) {
   var _a;
   const section = outline.sections[index];
   const n = outline.sections.length;
-  const sliceSize = Math.ceil(fullTranscript.length / n);
-  const overlap = Math.ceil(sliceSize * qp.overlapRatio);
-  const start = Math.max(0, Math.floor(index / n * fullTranscript.length) - overlap);
-  const end = Math.min(start + qp.excerptMaxChars, fullTranscript.length);
+  const start = Math.floor(index / n * fullTranscript.length);
+  const end = Math.min(
+    Math.floor((index + 1) / n * fullTranscript.length),
+    start + qp.excerptMaxChars
+  );
   const excerpt = fullTranscript.slice(start, end);
+  const alreadyCovered = completedSections.length > 0 ? completedSections.map((s, i) => `- Section ${i + 1} "${s.title}": ${s.summary}`).join("\n") : null;
   const prompt = lang === "en" ? `You are writing section ${index + 1} of ${n} for the Aeon essay titled "${outline.essayTitle}".
 
-FULL OUTLINE (for context \u2014 each section covers only its own topic):
-${outline.sections.map((s, i) => `${i + 1}. ${s.title}: ${s.summary}`).join("\n")}
+TOPICS ALREADY COVERED IN PREVIOUS SECTIONS \u2014 DO NOT REPEAT THESE:
+${alreadyCovered != null ? alreadyCovered : "(this is the first section \u2014 nothing covered yet)"}
 
-${prevText ? `PREVIOUS TEXT (last 800 chars \u2014 do NOT repeat any of this):
-\u2026${prevText.slice(-800)}
-` : ""}
 CURRENT SECTION: "${section.title}"
-${index === 0 ? "Open with a vivid hook \u2014 a scene, anecdote, or provocative question that draws the reader in." : "Continue naturally from the previous section."}
+${index === 0 ? "Open with a vivid hook \u2014 a scene, anecdote, or provocative question." : "Pick up where the previous section left off. Do not re-introduce topics listed above."}
 
-Your job: rewrite the TRANSCRIPT EXCERPT below in Aeon's literary voice.
-- Cover EVERY idea and argument in the excerpt. Do not skip or compress anything that the video actually discusses.
-- Do NOT repeat ideas from previous sections.
-- Write as much as the excerpt requires \u2014 this is a long-form essay, not a summary.
+Your job: rewrite ONLY the transcript excerpt below in Aeon's literary voice.
+- Treat your excerpt as a strict boundary: only write about what appears here.
+- If the excerpt mentions a topic already covered above, skip it entirely.
+- Cover every NEW idea in the excerpt fully \u2014 do not compress or omit.
 - Output body text ONLY (no heading). Every sentence must be complete.
 
-TRANSCRIPT EXCERPT FOR THIS SECTION:
+TRANSCRIPT EXCERPT (your sole source \u2014 section ${index + 1} of ${n}):
 ${excerpt}` : `\uB274\uD544\uB85C\uC18C\uD37C \uC5D0\uC138\uC774 "${outline.essayTitle}"\uC758 ${index + 1}\uBC88\uC9F8 \uC139\uC158(\uC804\uCCB4 ${n}\uAC1C)\uC744 \uC791\uC131\uD569\uB2C8\uB2E4.
 
-\uAC1C\uC694:
-${outline.sections.map((s, i) => `${i + 1}. ${s.title}: ${s.summary}`).join("\n")}
+\uC774\uC804 \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uB2E4\uB8EC \uC8FC\uC81C \u2014 \uC808\uB300 \uBC18\uBCF5 \uAE08\uC9C0:
+${alreadyCovered != null ? alreadyCovered : "(\uCCAB \uBC88\uC9F8 \uC139\uC158 \u2014 \uC544\uC9C1 \uB2E4\uB8EC \uB0B4\uC6A9 \uC5C6\uC74C)"}
 
-${prevText ? `\uC774\uC804 \uBCF8\uBB38 (\uB9C8\uC9C0\uB9C9 600\uC790 \u2014 \uC774 \uB0B4\uC6A9\uC744 \uC808\uB300 \uBC18\uBCF5\uD558\uC9C0 \uB9C8\uC138\uC694):
-\u2026${prevText.slice(-600)}
-` : ""}
 \uD604\uC7AC \uC139\uC158: "${section.title}"
-${index === 0 ? "\uC77C\uC0C1\uC758 \uC7A5\uBA74\uC774\uB098 \uCCA0\uD559\uC801 \uC9C8\uBB38\uC73C\uB85C \uC5D0\uC138\uC774\uB97C \uC5EC\uC138\uC694." : "\uC774\uC804 \uC139\uC158\uC5D0\uC11C \uC790\uC5F0\uC2A4\uB7FD\uAC8C \uC774\uC5B4\uC9C0\uC138\uC694."}
+${index === 0 ? "\uC77C\uC0C1\uC758 \uC7A5\uBA74\uC774\uB098 \uCCA0\uD559\uC801 \uC9C8\uBB38\uC73C\uB85C \uC5D0\uC138\uC774\uB97C \uC5EC\uC138\uC694." : "\uC774\uC804 \uC139\uC158\uC5D0\uC11C \uC790\uC5F0\uC2A4\uB7FD\uAC8C \uC774\uC5B4\uC9C0\uC138\uC694. \uC704\uC5D0 \uB098\uC5F4\uB41C \uC8FC\uC81C\uB294 \uB2E4\uC2DC \uAEBC\uB0B4\uC9C0 \uB9C8\uC138\uC694."}
 
-\uC544\uB798 \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uB0B4\uC6A9\uC744 \uB274\uD544\uB85C\uC18C\uD37C \uBB38\uCCB4\uB85C \uB2E4\uC2DC \uC4F0\uC138\uC694. \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8\uAC00 \uC2E4\uC81C\uB85C \uB9D0\uD558\uB294 \uB0B4\uC6A9\uB9CC \uB2E4\uB8E8\uC138\uC694. \uC774\uC804 \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uB2E4\uB8EC \uB0B4\uC6A9\uC740 \uBC18\uBCF5\uD558\uC9C0 \uB9C8\uC138\uC694. \uC18C\uC81C\uBAA9 \uC5C6\uC774 \uBCF8\uBB38\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uBC18\uB4DC\uC2DC \uB9C8\uC9C0\uB9C9 \uBB38\uC7A5\uC744 \uC644\uC804\uD788 \uB05D\uB0B4\uC138\uC694.
+\uC544\uB798 \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uB0B4\uC6A9\uB9CC \uB274\uD544\uB85C\uC18C\uD37C \uBB38\uCCB4\uB85C \uB2E4\uC2DC \uC4F0\uC138\uC694.
+- \uC774 \uBC1C\uCDCC\uBB38\uC744 \uC5C4\uACA9\uD55C \uACBD\uACC4\uB85C \uCDE8\uAE09\uD558\uC138\uC694. \uC5EC\uAE30 \uB098\uC628 \uB0B4\uC6A9\uB9CC \uC4F0\uC138\uC694.
+- \uBC1C\uCDCC\uBB38\uC5D0 \uC704\uC758 '\uC774\uBBF8 \uB2E4\uB8EC \uC8FC\uC81C'\uAC00 \uB4F1\uC7A5\uD558\uBA74 \uADF8 \uBD80\uBD84\uC740 \uAC74\uB108\uB6F0\uC138\uC694.
+- \uBC1C\uCDCC\uBB38\uC758 \uC0C8\uB85C\uC6B4 \uB0B4\uC6A9\uC740 \uBE60\uC9D0\uC5C6\uC774 \uCDA9\uBD84\uD788 \uB2E4\uB8E8\uC138\uC694.
+- \uC18C\uC81C\uBAA9 \uC5C6\uC774 \uBCF8\uBB38\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uBC18\uB4DC\uC2DC \uB9C8\uC9C0\uB9C9 \uBB38\uC7A5\uC744 \uC644\uC804\uD788 \uB05D\uB0B4\uC138\uC694.
 
-\uC774 \uC139\uC158\uC758 \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8:
+\uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uBC1C\uCDCC (\uC774 \uC139\uC158\uC758 \uC720\uC77C\uD55C \uC18C\uC2A4 \u2014 ${n}\uAC1C \uC911 ${index + 1}\uBC88\uC9F8):
 ${excerpt}`;
   const modelMax = (_a = MODEL_MAX_OUTPUT[cfg.model]) != null ? _a : 4096;
   const outTokens = qp.sectionOutputTokens > 0 ? Math.min(qp.sectionOutputTokens, modelMax) : modelMax;
@@ -521,24 +522,34 @@ ${s.body}`).join("\n\n");
   if (fullBody.length < 1500) {
     return sectionsWithHeadings.map((s) => s.body);
   }
-  const prompt = lang === "en" ? `The essay body below is divided into sections. Read it carefully and remove any sentences or paragraphs that repeat an idea already expressed in an earlier section.
+  const prompt = lang === "en" ? `The essay body below is divided into sections. Read all sections first, then remove duplicate content.
+
+A duplicate means: the SAME IDEA, argument, or historical fact \u2014 even if worded differently. Examples of what counts as duplicate:
+- Section 2 explains Martin Luther's Reformation after Section 1 already did
+- Section 3 quotes Rousseau's "man is born free" after Section 2 already referenced it
+- Any section re-introduces a concept (liberalism, identity, the Declaration of Independence) already established earlier
 
 Rules:
-- Delete the DUPLICATE sentence/paragraph, not the first occurrence.
-- Do not rewrite or rephrase. Only delete.
-- Keep section markers (=== SECTION N: ... ===) intact so the result can be parsed.
-- If a section has nothing left after deduplication, write "(removed as duplicate)" as a placeholder.
-- Output the full text with markers, cleaned of duplicates.
+- Keep the FIRST occurrence. Delete all later repetitions of the same idea.
+- Do not rewrite or rephrase \u2014 only delete sentences or paragraphs.
+- Keep section markers (=== SECTION N: ... ===) intact.
+- If a section becomes empty, write "(content moved to earlier section)" as placeholder.
+- Output the complete text with markers.
 
 ESSAY BODY:
-${fullBody}` : `\uC544\uB798 \uC5D0\uC138\uC774 \uBCF8\uBB38\uC740 \uC5EC\uB7EC \uC139\uC158\uC73C\uB85C \uB098\uB269\uB2C8\uB2E4. \uC804\uCCB4\uB97C \uC77D\uACE0, \uC55E \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uB2E4\uB8EC \uB0B4\uC6A9\uC744 \uBC18\uBCF5\uD558\uB294 \uBB38\uC7A5\uC774\uB098 \uB2E8\uB77D\uC744 \uC0AD\uC81C\uD558\uC138\uC694.
+${fullBody}` : `\uC544\uB798 \uC5D0\uC138\uC774 \uBCF8\uBB38\uC744 \uC139\uC158\uBCC4\uB85C \uC77D\uACE0, \uC55E \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uB2E4\uB8EC \uC544\uC774\uB514\uC5B4\uB97C \uBC18\uBCF5\uD558\uB294 \uB0B4\uC6A9\uC744 \uC0AD\uC81C\uD558\uC138\uC694.
+
+\uC911\uBCF5\uC758 \uAE30\uC900: \uD45C\uD604\uC774 \uB2EC\uB77C\uB3C4 \uAC19\uC740 \uC544\uC774\uB514\uC5B4\xB7\uB17C\uC810\xB7\uC5ED\uC0AC\uC801 \uC0AC\uC2E4\uC774\uBA74 \uC911\uBCF5\uC785\uB2C8\uB2E4. \uC608\uC2DC:
+- 2\uBC88\uC9F8 \uC139\uC158\uC774 1\uBC88\uC9F8 \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uC124\uBA85\uD55C \uB8E8\uD130\uC758 \uC885\uAD50\uAC1C\uD601\uC744 \uB2E4\uC2DC \uC124\uBA85
+- 3\uBC88\uC9F8 \uC139\uC158\uC774 2\uBC88\uC9F8 \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uC778\uC6A9\uD55C \uB8E8\uC18C\uC758 "\uC778\uAC04\uC740 \uC790\uC720\uB86D\uAC8C \uD0DC\uC5B4\uB09C\uB2E4"\uB97C \uB2E4\uC2DC \uC778\uC6A9
+- \uC5B4\uB5A4 \uC139\uC158\uC774\uB4E0 \uC55E\uC5D0\uC11C \uC774\uBBF8 \uD655\uB9BD\uB41C \uAC1C\uB150(\uC790\uC720\uC8FC\uC758, \uC815\uCCB4\uC131, \uB3C5\uB9BD\uC120\uC5B8\uC11C \uB4F1)\uC744 \uC7AC\uB3C4\uC785
 
 \uADDC\uCE59:
-- \uCCAB \uBC88\uC9F8 \uB4F1\uC7A5\uC740 \uC720\uC9C0\uD558\uACE0 \uC774\uD6C4 \uC911\uBCF5\uC744 \uC0AD\uC81C\uD558\uC138\uC694.
-- \uB2E4\uC2DC \uC4F0\uAC70\uB098 \uBC14\uAFB8\uC9C0 \uB9C8\uC138\uC694. \uC0AD\uC81C\uB9CC \uD558\uC138\uC694.
-- \uC139\uC158 \uAD6C\uBD84\uC790(=== SECTION N: ... ===)\uB294 \uADF8\uB300\uB85C \uC720\uC9C0\uD558\uC138\uC694.
-- \uC0AD\uC81C \uD6C4 \uB0B4\uC6A9\uC774 \uC5C6\uB294 \uC139\uC158\uC740 "(\uC911\uBCF5\uC73C\uB85C \uC81C\uAC70\uB428)"\uC744 \uB0A8\uAE30\uC138\uC694.
-- \uC911\uBCF5\uC774 \uC81C\uAC70\uB41C \uC804\uCCB4 \uD14D\uC2A4\uD2B8\uB97C \uCD9C\uB825\uD558\uC138\uC694.
+- \uCCAB \uBC88\uC9F8 \uB4F1\uC7A5\uC740 \uC720\uC9C0, \uC774\uD6C4 \uAC19\uC740 \uC544\uC774\uB514\uC5B4\uB294 \uC0AD\uC81C
+- \uB2E4\uC2DC \uC4F0\uAC70\uB098 \uBC14\uAFB8\uC9C0 \uB9D0\uACE0 \uC0AD\uC81C\uB9CC \uD558\uC138\uC694
+- \uC139\uC158 \uAD6C\uBD84\uC790(=== SECTION N: ... ===)\uB294 \uADF8\uB300\uB85C \uC720\uC9C0
+- \uC139\uC158\uC774 \uBE44\uBA74 "(\uC55E \uC139\uC158\uC73C\uB85C \uD1B5\uD569\uB428)"\uC744 \uB0A8\uAE30\uC138\uC694
+- \uC804\uCCB4 \uD14D\uC2A4\uD2B8\uB97C \uAD6C\uBD84\uC790 \uD3EC\uD568\uD574 \uCD9C\uB825\uD558\uC138\uC694
 
 \uC5D0\uC138\uC774 \uBCF8\uBB38:
 ${fullBody}`;
@@ -578,7 +589,11 @@ async function generateEssay(provider, apiKey, model, transcript, language, sour
     tick(
       language === "en" ? `Writing section ${i + 1}/${outline.sections.length}: "${outline.sections[i].title}"` : `\uC139\uC158 ${i + 1}/${outline.sections.length} \uC791\uC131 \uC911: "${outline.sections[i].title}"`
     );
-    const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"), qp);
+    const completed = outline.sections.slice(0, i).map((s) => ({
+      title: s.title,
+      summary: s.summary
+    }));
+    const text = await writeSection(cfg, language, outline, i, transcript, completed, qp);
     bodies.push(text);
   }
   onProgress({

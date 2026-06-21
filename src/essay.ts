@@ -25,7 +25,7 @@ interface QualityParams {
 const QUALITY_PARAMS: Record<EssayQuality, QualityParams> = {
   quick: {
     excerptMaxChars:     5000,
-    overlapRatio:        0.10,
+    overlapRatio:        0,    // no overlap — overlap causes duplicate content
     chunkSummaryTokens:  500,
     outlineMaxTokens:    2048,
     maxSections:         5,
@@ -33,7 +33,7 @@ const QUALITY_PARAMS: Record<EssayQuality, QualityParams> = {
   },
   balanced: {
     excerptMaxChars:     7500,
-    overlapRatio:        0.15,
+    overlapRatio:        0,
     chunkSummaryTokens:  700,
     outlineMaxTokens:    3000,
     maxSections:         8,
@@ -41,7 +41,7 @@ const QUALITY_PARAMS: Record<EssayQuality, QualityParams> = {
   },
   thorough: {
     excerptMaxChars:     10000,
-    overlapRatio:        0.15,
+    overlapRatio:        0,
     chunkSummaryTokens:  900,
     outlineMaxTokens:    4096,
     maxSections:         12,
@@ -393,49 +393,58 @@ async function writeSection(
   outline: EssayOutline,
   index: number,
   fullTranscript: string,
-  prevText: string,
+  completedSections: { title: string; summary: string }[],
   qp: QualityParams
 ): Promise<string> {
   const section = outline.sections[index];
   const n = outline.sections.length;
 
-  const sliceSize = Math.ceil(fullTranscript.length / n);
-  const overlap   = Math.ceil(sliceSize * qp.overlapRatio);
-  const start = Math.max(0, Math.floor((index / n) * fullTranscript.length) - overlap);
-  const end   = Math.min(start + qp.excerptMaxChars, fullTranscript.length);
+  // Strict non-overlapping slice — each section gets exactly its share
+  const start = Math.floor((index / n) * fullTranscript.length);
+  const end   = Math.min(
+    Math.floor(((index + 1) / n) * fullTranscript.length),
+    start + qp.excerptMaxChars
+  );
   const excerpt = fullTranscript.slice(start, end);
+
+  // Build an explicit "already covered" list from completed sections
+  const alreadyCovered = completedSections.length > 0
+    ? completedSections.map((s, i) => `- Section ${i + 1} "${s.title}": ${s.summary}`).join("\n")
+    : null;
 
   const prompt =
     lang === "en"
       ? `You are writing section ${index + 1} of ${n} for the Aeon essay titled "${outline.essayTitle}".
 
-FULL OUTLINE (for context — each section covers only its own topic):
-${outline.sections.map((s, i) => `${i + 1}. ${s.title}: ${s.summary}`).join("\n")}
+TOPICS ALREADY COVERED IN PREVIOUS SECTIONS — DO NOT REPEAT THESE:
+${alreadyCovered ?? "(this is the first section — nothing covered yet)"}
 
-${prevText ? `PREVIOUS TEXT (last 800 chars — do NOT repeat any of this):\n…${prevText.slice(-800)}\n` : ""}
 CURRENT SECTION: "${section.title}"
-${index === 0 ? "Open with a vivid hook — a scene, anecdote, or provocative question that draws the reader in." : "Continue naturally from the previous section."}
+${index === 0 ? "Open with a vivid hook — a scene, anecdote, or provocative question." : "Pick up where the previous section left off. Do not re-introduce topics listed above."}
 
-Your job: rewrite the TRANSCRIPT EXCERPT below in Aeon's literary voice.
-- Cover EVERY idea and argument in the excerpt. Do not skip or compress anything that the video actually discusses.
-- Do NOT repeat ideas from previous sections.
-- Write as much as the excerpt requires — this is a long-form essay, not a summary.
+Your job: rewrite ONLY the transcript excerpt below in Aeon's literary voice.
+- Treat your excerpt as a strict boundary: only write about what appears here.
+- If the excerpt mentions a topic already covered above, skip it entirely.
+- Cover every NEW idea in the excerpt fully — do not compress or omit.
 - Output body text ONLY (no heading). Every sentence must be complete.
 
-TRANSCRIPT EXCERPT FOR THIS SECTION:
+TRANSCRIPT EXCERPT (your sole source — section ${index + 1} of ${n}):
 ${excerpt}`
       : `뉴필로소퍼 에세이 "${outline.essayTitle}"의 ${index + 1}번째 섹션(전체 ${n}개)을 작성합니다.
 
-개요:
-${outline.sections.map((s, i) => `${i + 1}. ${s.title}: ${s.summary}`).join("\n")}
+이전 섹션에서 이미 다룬 주제 — 절대 반복 금지:
+${alreadyCovered ?? "(첫 번째 섹션 — 아직 다룬 내용 없음)"}
 
-${prevText ? `이전 본문 (마지막 600자 — 이 내용을 절대 반복하지 마세요):\n…${prevText.slice(-600)}\n` : ""}
 현재 섹션: "${section.title}"
-${index === 0 ? "일상의 장면이나 철학적 질문으로 에세이를 여세요." : "이전 섹션에서 자연스럽게 이어지세요."}
+${index === 0 ? "일상의 장면이나 철학적 질문으로 에세이를 여세요." : "이전 섹션에서 자연스럽게 이어지세요. 위에 나열된 주제는 다시 꺼내지 마세요."}
 
-아래 트랜스크립트 내용을 뉴필로소퍼 문체로 다시 쓰세요. 트랜스크립트가 실제로 말하는 내용만 다루세요. 이전 섹션에서 이미 다룬 내용은 반복하지 마세요. 소제목 없이 본문만 출력하세요. 반드시 마지막 문장을 완전히 끝내세요.
+아래 트랜스크립트 내용만 뉴필로소퍼 문체로 다시 쓰세요.
+- 이 발췌문을 엄격한 경계로 취급하세요. 여기 나온 내용만 쓰세요.
+- 발췌문에 위의 '이미 다룬 주제'가 등장하면 그 부분은 건너뛰세요.
+- 발췌문의 새로운 내용은 빠짐없이 충분히 다루세요.
+- 소제목 없이 본문만 출력하세요. 반드시 마지막 문장을 완전히 끝내세요.
 
-이 섹션의 트랜스크립트:
+트랜스크립트 발췌 (이 섹션의 유일한 소스 — ${n}개 중 ${index + 1}번째):
 ${excerpt}`;
 
   const modelMax = MODEL_MAX_OUTPUT[cfg.model] ?? 4096;
@@ -509,25 +518,35 @@ async function deduplicateBody(
 
   const prompt =
     lang === "en"
-      ? `The essay body below is divided into sections. Read it carefully and remove any sentences or paragraphs that repeat an idea already expressed in an earlier section.
+      ? `The essay body below is divided into sections. Read all sections first, then remove duplicate content.
+
+A duplicate means: the SAME IDEA, argument, or historical fact — even if worded differently. Examples of what counts as duplicate:
+- Section 2 explains Martin Luther's Reformation after Section 1 already did
+- Section 3 quotes Rousseau's "man is born free" after Section 2 already referenced it
+- Any section re-introduces a concept (liberalism, identity, the Declaration of Independence) already established earlier
 
 Rules:
-- Delete the DUPLICATE sentence/paragraph, not the first occurrence.
-- Do not rewrite or rephrase. Only delete.
-- Keep section markers (=== SECTION N: ... ===) intact so the result can be parsed.
-- If a section has nothing left after deduplication, write "(removed as duplicate)" as a placeholder.
-- Output the full text with markers, cleaned of duplicates.
+- Keep the FIRST occurrence. Delete all later repetitions of the same idea.
+- Do not rewrite or rephrase — only delete sentences or paragraphs.
+- Keep section markers (=== SECTION N: ... ===) intact.
+- If a section becomes empty, write "(content moved to earlier section)" as placeholder.
+- Output the complete text with markers.
 
 ESSAY BODY:
 ${fullBody}`
-      : `아래 에세이 본문은 여러 섹션으로 나뉩니다. 전체를 읽고, 앞 섹션에서 이미 다룬 내용을 반복하는 문장이나 단락을 삭제하세요.
+      : `아래 에세이 본문을 섹션별로 읽고, 앞 섹션에서 이미 다룬 아이디어를 반복하는 내용을 삭제하세요.
+
+중복의 기준: 표현이 달라도 같은 아이디어·논점·역사적 사실이면 중복입니다. 예시:
+- 2번째 섹션이 1번째 섹션에서 이미 설명한 루터의 종교개혁을 다시 설명
+- 3번째 섹션이 2번째 섹션에서 이미 인용한 루소의 "인간은 자유롭게 태어난다"를 다시 인용
+- 어떤 섹션이든 앞에서 이미 확립된 개념(자유주의, 정체성, 독립선언서 등)을 재도입
 
 규칙:
-- 첫 번째 등장은 유지하고 이후 중복을 삭제하세요.
-- 다시 쓰거나 바꾸지 마세요. 삭제만 하세요.
-- 섹션 구분자(=== SECTION N: ... ===)는 그대로 유지하세요.
-- 삭제 후 내용이 없는 섹션은 "(중복으로 제거됨)"을 남기세요.
-- 중복이 제거된 전체 텍스트를 출력하세요.
+- 첫 번째 등장은 유지, 이후 같은 아이디어는 삭제
+- 다시 쓰거나 바꾸지 말고 삭제만 하세요
+- 섹션 구분자(=== SECTION N: ... ===)는 그대로 유지
+- 섹션이 비면 "(앞 섹션으로 통합됨)"을 남기세요
+- 전체 텍스트를 구분자 포함해 출력하세요
 
 에세이 본문:
 ${fullBody}`;
@@ -595,7 +614,12 @@ export async function generateEssay(
         ? `Writing section ${i + 1}/${outline.sections.length}: "${outline.sections[i].title}"`
         : `섹션 ${i + 1}/${outline.sections.length} 작성 중: "${outline.sections[i].title}"`
     );
-    const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"), qp);
+    // Pass completed section titles+summaries so the model knows what NOT to repeat
+    const completed = outline.sections.slice(0, i).map((s) => ({
+      title: s.title,
+      summary: s.summary,
+    }));
+    const text = await writeSection(cfg, language, outline, i, transcript, completed, qp);
     bodies.push(text);
   }
 
