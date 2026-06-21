@@ -514,6 +514,52 @@ ${bodyText.slice(-2e3)}
 \uACB0\uB860 \uBCF8\uBB38\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uBC18\uB4DC\uC2DC \uC644\uC804\uD55C \uBB38\uC7A5\uC73C\uB85C \uB9C8\uBB34\uB9AC\uD558\uC138\uC694.`;
   return (await llmCall(cfg, SYS(lang), prompt, 2e3)).trim();
 }
+async function deduplicateBody(cfg, lang, sectionsWithHeadings) {
+  var _a;
+  const fullBody = sectionsWithHeadings.map((s, i) => `=== SECTION ${i + 1}: ${s.heading} ===
+${s.body}`).join("\n\n");
+  if (fullBody.length < 1500) {
+    return sectionsWithHeadings.map((s) => s.body);
+  }
+  const prompt = lang === "en" ? `The essay body below is divided into sections. Read it carefully and remove any sentences or paragraphs that repeat an idea already expressed in an earlier section.
+
+Rules:
+- Delete the DUPLICATE sentence/paragraph, not the first occurrence.
+- Do not rewrite or rephrase. Only delete.
+- Keep section markers (=== SECTION N: ... ===) intact so the result can be parsed.
+- If a section has nothing left after deduplication, write "(removed as duplicate)" as a placeholder.
+- Output the full text with markers, cleaned of duplicates.
+
+ESSAY BODY:
+${fullBody}` : `\uC544\uB798 \uC5D0\uC138\uC774 \uBCF8\uBB38\uC740 \uC5EC\uB7EC \uC139\uC158\uC73C\uB85C \uB098\uB269\uB2C8\uB2E4. \uC804\uCCB4\uB97C \uC77D\uACE0, \uC55E \uC139\uC158\uC5D0\uC11C \uC774\uBBF8 \uB2E4\uB8EC \uB0B4\uC6A9\uC744 \uBC18\uBCF5\uD558\uB294 \uBB38\uC7A5\uC774\uB098 \uB2E8\uB77D\uC744 \uC0AD\uC81C\uD558\uC138\uC694.
+
+\uADDC\uCE59:
+- \uCCAB \uBC88\uC9F8 \uB4F1\uC7A5\uC740 \uC720\uC9C0\uD558\uACE0 \uC774\uD6C4 \uC911\uBCF5\uC744 \uC0AD\uC81C\uD558\uC138\uC694.
+- \uB2E4\uC2DC \uC4F0\uAC70\uB098 \uBC14\uAFB8\uC9C0 \uB9C8\uC138\uC694. \uC0AD\uC81C\uB9CC \uD558\uC138\uC694.
+- \uC139\uC158 \uAD6C\uBD84\uC790(=== SECTION N: ... ===)\uB294 \uADF8\uB300\uB85C \uC720\uC9C0\uD558\uC138\uC694.
+- \uC0AD\uC81C \uD6C4 \uB0B4\uC6A9\uC774 \uC5C6\uB294 \uC139\uC158\uC740 "(\uC911\uBCF5\uC73C\uB85C \uC81C\uAC70\uB428)"\uC744 \uB0A8\uAE30\uC138\uC694.
+- \uC911\uBCF5\uC774 \uC81C\uAC70\uB41C \uC804\uCCB4 \uD14D\uC2A4\uD2B8\uB97C \uCD9C\uB825\uD558\uC138\uC694.
+
+\uC5D0\uC138\uC774 \uBCF8\uBB38:
+${fullBody}`;
+  const modelMax = (_a = MODEL_MAX_OUTPUT[cfg.model]) != null ? _a : 4096;
+  let cleaned;
+  try {
+    cleaned = await llmCall(cfg, SYS(lang), prompt, modelMax);
+  } catch (e) {
+    return sectionsWithHeadings.map((s) => s.body);
+  }
+  return sectionsWithHeadings.map((_, i) => {
+    const n = i + 1;
+    const nextN = i + 2;
+    const start = cleaned.indexOf(`=== SECTION ${n}:`);
+    if (start === -1) return sectionsWithHeadings[i].body;
+    const headerEnd = cleaned.indexOf("\n", start);
+    const end = cleaned.indexOf(`=== SECTION ${nextN}:`, start);
+    const body = cleaned.slice(headerEnd + 1, end === -1 ? void 0 : end).trim();
+    return body || sectionsWithHeadings[i].body;
+  });
+}
 async function generateEssay(provider, apiKey, model, transcript, language, sourceTitle, quality, onProgress) {
   const cfg = { provider, apiKey, model };
   const qp = QUALITY_PARAMS[quality];
@@ -535,12 +581,22 @@ async function generateEssay(provider, apiKey, model, transcript, language, sour
     const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"), qp);
     bodies.push(text);
   }
+  onProgress({
+    step: language === "en" ? "Reviewing for duplicate content\u2026" : "\uC911\uBCF5 \uB0B4\uC6A9 \uAC80\uD1A0 \uC911\u2026",
+    current: 92,
+    total: 100
+  });
+  const dedupedBodies = await deduplicateBody(
+    cfg,
+    language,
+    outline.sections.map((s, i) => ({ heading: s.title, body: bodies[i] }))
+  );
   tick(language === "en" ? "Writing conclusion\u2026" : "\uACB0\uB860 \uC791\uC131 \uC911\u2026");
   const conclusion = await writeIntroOrConclusion(
     cfg,
     language,
     outline,
-    bodies.join("\n\n"),
+    dedupedBodies.join("\n\n"),
     "conclusion"
   );
   const styleTag = language === "en" ? "AEON Essay" : "\uB274\uD544\uB85C\uC18C\uD37C \uC5D0\uC138\uC774";
@@ -549,7 +605,7 @@ async function generateEssay(provider, apiKey, model, transcript, language, sour
   const toc = outline.sections.map((s, i) => `${i + 1}. ${s.title}`).join("\n");
   const body = outline.sections.map((s, i) => `## ${s.title}
 
-${bodies[i]}`).join("\n\n---\n\n");
+${dedupedBodies[i]}`).join("\n\n---\n\n");
   return `---
 title: "${safeTitle}"
 source: "${sourceTitle}"

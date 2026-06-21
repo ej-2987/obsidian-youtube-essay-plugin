@@ -489,6 +489,73 @@ ${bodyText.slice(-2000)}
 }
 
 // ---------------------------------------------------------------------------
+// Step 4: Deduplication pass — remove repeated sentences/ideas across sections
+// ---------------------------------------------------------------------------
+
+async function deduplicateBody(
+  cfg: LLMConfig,
+  lang: EssayLanguage,
+  sectionsWithHeadings: { heading: string; body: string }[]
+): Promise<string[]> {
+  // Feed the full assembled body (headings stripped for the model, re-added after)
+  const fullBody = sectionsWithHeadings
+    .map((s, i) => `=== SECTION ${i + 1}: ${s.heading} ===\n${s.body}`)
+    .join("\n\n");
+
+  // If the body is very short there's nothing to deduplicate
+  if (fullBody.length < 1500) {
+    return sectionsWithHeadings.map((s) => s.body);
+  }
+
+  const prompt =
+    lang === "en"
+      ? `The essay body below is divided into sections. Read it carefully and remove any sentences or paragraphs that repeat an idea already expressed in an earlier section.
+
+Rules:
+- Delete the DUPLICATE sentence/paragraph, not the first occurrence.
+- Do not rewrite or rephrase. Only delete.
+- Keep section markers (=== SECTION N: ... ===) intact so the result can be parsed.
+- If a section has nothing left after deduplication, write "(removed as duplicate)" as a placeholder.
+- Output the full text with markers, cleaned of duplicates.
+
+ESSAY BODY:
+${fullBody}`
+      : `아래 에세이 본문은 여러 섹션으로 나뉩니다. 전체를 읽고, 앞 섹션에서 이미 다룬 내용을 반복하는 문장이나 단락을 삭제하세요.
+
+규칙:
+- 첫 번째 등장은 유지하고 이후 중복을 삭제하세요.
+- 다시 쓰거나 바꾸지 마세요. 삭제만 하세요.
+- 섹션 구분자(=== SECTION N: ... ===)는 그대로 유지하세요.
+- 삭제 후 내용이 없는 섹션은 "(중복으로 제거됨)"을 남기세요.
+- 중복이 제거된 전체 텍스트를 출력하세요.
+
+에세이 본문:
+${fullBody}`;
+
+  const modelMax = MODEL_MAX_OUTPUT[cfg.model] ?? 4096;
+  let cleaned: string;
+  try {
+    cleaned = await llmCall(cfg, SYS(lang), prompt, modelMax);
+  } catch {
+    // If dedup call fails, return original bodies unchanged
+    return sectionsWithHeadings.map((s) => s.body);
+  }
+
+  // Parse back: extract body text for each section from the cleaned output
+  return sectionsWithHeadings.map((_, i) => {
+    const n = i + 1;
+    const nextN = i + 2;
+    const start = cleaned.indexOf(`=== SECTION ${n}:`);
+    if (start === -1) return sectionsWithHeadings[i].body; // fallback
+
+    const headerEnd = cleaned.indexOf("\n", start);
+    const end = cleaned.indexOf(`=== SECTION ${nextN}:`, start);
+    const body = cleaned.slice(headerEnd + 1, end === -1 ? undefined : end).trim();
+    return body || sectionsWithHeadings[i].body;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -532,10 +599,22 @@ export async function generateEssay(
     bodies.push(text);
   }
 
-  // ── 4. Conclusion ──────────────────────────────────────────────────────────
+  // ── 4. Deduplication pass ─────────────────────────────────────────────────
+  onProgress({
+    step: language === "en" ? "Reviewing for duplicate content…" : "중복 내용 검토 중…",
+    current: 92,
+    total: 100,
+  });
+  const dedupedBodies = await deduplicateBody(
+    cfg,
+    language,
+    outline.sections.map((s, i) => ({ heading: s.title, body: bodies[i] }))
+  );
+
+  // ── 5. Conclusion ──────────────────────────────────────────────────────────
   tick(language === "en" ? "Writing conclusion…" : "결론 작성 중…");
   const conclusion = await writeIntroOrConclusion(
-    cfg, language, outline, bodies.join("\n\n"), "conclusion"
+    cfg, language, outline, dedupedBodies.join("\n\n"), "conclusion"
   );
 
   // ── Assemble markdown ──────────────────────────────────────────────────────
@@ -548,7 +627,7 @@ export async function generateEssay(
   const toc = outline.sections.map((s, i) => `${i + 1}. ${s.title}`).join("\n");
 
   const body = outline.sections
-    .map((s, i) => `## ${s.title}\n\n${bodies[i]}`)
+    .map((s, i) => `## ${s.title}\n\n${dedupedBodies[i]}`)
     .join("\n\n---\n\n");
 
   return `---
