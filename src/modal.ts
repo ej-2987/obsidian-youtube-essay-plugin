@@ -1,7 +1,7 @@
 import { App, Modal, Notice, Setting, TAbstractFile, TFile, FuzzySuggestModal } from "obsidian";
 import type YoutubeEssayPlugin from "./main";
 import { generateEssay } from "./essay";
-import type { EssayLanguage } from "./settings";
+import type { EssayLanguage, EssayQuality } from "./settings";
 
 // ── File picker modal ─────────────────────────────────────────────────────────
 
@@ -33,6 +33,7 @@ export class YoutubeEssayModal extends Modal {
   plugin: YoutubeEssayPlugin;
   private selectedFile: TFile | null = null;
   private language: EssayLanguage;
+  private quality: EssayQuality;
   private isGenerating = false;
   private progressBar: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
@@ -42,6 +43,7 @@ export class YoutubeEssayModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.language = plugin.settings.defaultLanguage;
+    this.quality  = plugin.settings.defaultQuality;
 
     // Pre-select the active file if it is a markdown file
     const active = this.app.workspace.getActiveFile();
@@ -83,6 +85,19 @@ export class YoutubeEssayModal extends Modal {
           .addOption("en", "English — AEON style")
           .setValue(this.language)
           .onChange((v) => (this.language = v as EssayLanguage))
+      );
+
+    // ── Quality selector ──────────────────────────────────────────────────────
+    new Setting(contentEl)
+      .setName("Quality / Cost")
+      .setDesc("저비용 ≈ Haiku 10분/$0.01 | 중간 ≈ $0.03–0.05 | 고품질 ≈ $0.08–0.15")
+      .addDropdown((drop) =>
+        drop
+          .addOption("quick",    "⚡ 저비용 — 짧은 영상, 빠름")
+          .addOption("balanced", "⚖️ 중간비용 — 균형 (기본)")
+          .addOption("thorough", "🔍 고품질 — 긴 영상, 상세 커버리지")
+          .setValue(this.quality)
+          .onChange((v) => (this.quality = v as EssayQuality))
       );
 
     // ── Progress area ─────────────────────────────────────────────────────────
@@ -179,6 +194,7 @@ export class YoutubeEssayModal extends Modal {
         transcript,
         this.language,
         sourceTitle,
+        this.quality,
         ({ step, current }) => this.setStatus(step, 5 + Math.round(current * 0.93))
       );
 

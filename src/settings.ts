@@ -3,6 +3,7 @@ import type YoutubeEssayPlugin from "./main";
 
 export type ApiProvider = "claude" | "openai" | "gemini";
 export type EssayLanguage = "en" | "ko";
+export type EssayQuality = "quick" | "balanced" | "thorough";
 
 export interface YoutubeEssaySettings {
   apiProvider: ApiProvider;
@@ -14,6 +15,7 @@ export interface YoutubeEssaySettings {
   geminiModel: string;
   outputFolder: string;
   defaultLanguage: EssayLanguage;
+  defaultQuality: EssayQuality;
 }
 
 // ── Valid model lists (used for migration) ────────────────────────────────────
@@ -47,6 +49,7 @@ export const DEFAULT_SETTINGS: YoutubeEssaySettings = {
   geminiModel: "gemini-2.5-flash",
   outputFolder: "Essays",
   defaultLanguage: "ko",
+  defaultQuality: "balanced",
 };
 
 // ── Migration: reset invalid saved model names to defaults ────────────────────
@@ -196,6 +199,7 @@ export class YoutubeEssaySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Default Language / Style")
+      .setDesc("생성 시 모달에서 언제든 변경 가능")
       .addDropdown((drop) =>
         drop
           .addOption("ko", "한국어 — 뉴필로소퍼 스타일")
@@ -203,6 +207,23 @@ export class YoutubeEssaySettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.defaultLanguage)
           .onChange(async (v) => {
             this.plugin.settings.defaultLanguage = v as EssayLanguage;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Default Quality / Cost")
+      .setDesc(
+        "저비용: 빠르고 저렴 | 중간: 균형 (권장) | 고품질: 가장 상세하지만 토큰 소모 큼"
+      )
+      .addDropdown((drop) =>
+        drop
+          .addOption("quick",    "⚡ 저비용 — 짧은 영상·비용 절감")
+          .addOption("balanced", "⚖️ 중간비용 — 균형 (기본값)")
+          .addOption("thorough", "🔍 고품질 — 긴 영상·상세 커버리지")
+          .setValue(this.plugin.settings.defaultQuality)
+          .onChange(async (v) => {
+            this.plugin.settings.defaultQuality = v as EssayQuality;
             await this.plugin.saveSettings();
           })
       );

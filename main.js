@@ -58,7 +58,8 @@ var DEFAULT_SETTINGS = {
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash",
   outputFolder: "Essays",
-  defaultLanguage: "ko"
+  defaultLanguage: "ko",
+  defaultQuality: "balanced"
 };
 function migrateSettings(s) {
   if (!VALID_CLAUDE_MODELS.includes(s.claudeModel))
@@ -131,9 +132,17 @@ var YoutubeEssaySettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     containerEl.createEl("h3", { text: "\uC77C\uBC18 \uC124\uC815 / General" });
-    new import_obsidian.Setting(containerEl).setName("Default Language / Style").addDropdown(
+    new import_obsidian.Setting(containerEl).setName("Default Language / Style").setDesc("\uC0DD\uC131 \uC2DC \uBAA8\uB2EC\uC5D0\uC11C \uC5B8\uC81C\uB4E0 \uBCC0\uACBD \uAC00\uB2A5").addDropdown(
       (drop) => drop.addOption("ko", "\uD55C\uAD6D\uC5B4 \u2014 \uB274\uD544\uB85C\uC18C\uD37C \uC2A4\uD0C0\uC77C").addOption("en", "English \u2014 AEON style").setValue(this.plugin.settings.defaultLanguage).onChange(async (v) => {
         this.plugin.settings.defaultLanguage = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default Quality / Cost").setDesc(
+      "\uC800\uBE44\uC6A9: \uBE60\uB974\uACE0 \uC800\uB834 | \uC911\uAC04: \uADE0\uD615 (\uAD8C\uC7A5) | \uACE0\uD488\uC9C8: \uAC00\uC7A5 \uC0C1\uC138\uD558\uC9C0\uB9CC \uD1A0\uD070 \uC18C\uBAA8 \uD07C"
+    ).addDropdown(
+      (drop) => drop.addOption("quick", "\u26A1 \uC800\uBE44\uC6A9 \u2014 \uC9E7\uC740 \uC601\uC0C1\xB7\uBE44\uC6A9 \uC808\uAC10").addOption("balanced", "\u2696\uFE0F \uC911\uAC04\uBE44\uC6A9 \u2014 \uADE0\uD615 (\uAE30\uBCF8\uAC12)").addOption("thorough", "\u{1F50D} \uACE0\uD488\uC9C8 \u2014 \uAE34 \uC601\uC0C1\xB7\uC0C1\uC138 \uCEE4\uBC84\uB9AC\uC9C0").setValue(this.plugin.settings.defaultQuality).onChange(async (v) => {
+        this.plugin.settings.defaultQuality = v;
         await this.plugin.saveSettings();
       })
     );
@@ -151,6 +160,33 @@ var import_obsidian3 = require("obsidian");
 
 // src/essay.ts
 var import_obsidian2 = require("obsidian");
+var QUALITY_PARAMS = {
+  quick: {
+    excerptMaxChars: 5e3,
+    overlapRatio: 0.1,
+    chunkSummaryTokens: 500,
+    outlineMaxTokens: 2048,
+    maxSections: 5,
+    sectionOutputTokens: 2500
+  },
+  balanced: {
+    excerptMaxChars: 7500,
+    overlapRatio: 0.15,
+    chunkSummaryTokens: 700,
+    outlineMaxTokens: 3e3,
+    maxSections: 8,
+    sectionOutputTokens: 5e3
+  },
+  thorough: {
+    excerptMaxChars: 1e4,
+    overlapRatio: 0.15,
+    chunkSummaryTokens: 900,
+    outlineMaxTokens: 4096,
+    maxSections: 12,
+    sectionOutputTokens: 0
+    // 0 = use model max
+  }
+};
 function chunkText(text, maxChars = 24e3) {
   var _a;
   if (text.length <= maxChars) return [text];
@@ -344,7 +380,7 @@ var NYPHILOSOPHER_SYSTEM = `\uB2F9\uC2E0\uC740 \u300A\uB274 \uD544\uB85C\uC18C\u
 - \uC18C\uC81C\uBAA9\uC740 \uD574\uB2F9 \uC139\uC158\uC758 \uC2E4\uC81C \uB0B4\uC6A9\uC744 \uBC18\uC601\uD558\uB294 \uBA85\uC0C1\uC801\xB7\uC9C8\uBB38\uD615 \uBB38\uAD6C\uB85C \uC9D3\uB418, \uACFC\uC7A5\uD558\uC9C0 \uB9C8\uC138\uC694.
 - \uBB38\uCCB4\uB294 \uC0AC\uBCC0\uC801\uC774\uACE0 \uC11C\uC815\uC801\uC774\uB418 \uB17C\uB9AC\uC801 \uD750\uB984\uC744 \uC783\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.`;
 var SYS = (lang) => lang === "en" ? AEON_SYSTEM : NYPHILOSOPHER_SYSTEM;
-async function buildOutline(cfg, transcript, lang, sourceTitle, onStatus) {
+async function buildOutline(cfg, transcript, lang, sourceTitle, qp, onStatus) {
   const chunks = chunkText(transcript, 24e3);
   let condensed = transcript;
   if (chunks.length > 1) {
@@ -355,13 +391,13 @@ async function buildOutline(cfg, transcript, lang, sourceTitle, onStatus) {
       );
       const s = await llmCall(
         cfg,
-        lang === "en" ? "You are a precise summariser. Your goal is to preserve every distinct topic and argument so nothing is lost when the summary is later used to write an essay." : "\uB2F9\uC2E0\uC740 \uC815\uD655\uD55C \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC774\uD6C4 \uC5D0\uC138\uC774 \uC791\uC131\uC5D0 \uC4F0\uC77C \uC694\uC57D\uC774\uBBC0\uB85C, \uBAA8\uB4E0 \uAC1C\uBCC4 \uC8FC\uC81C\uC640 \uB17C\uC810\uC774 \uC190\uC2E4 \uC5C6\uC774 \uBCF4\uC874\uB418\uC5B4\uC57C \uD569\uB2C8\uB2E4.",
-        lang === "en" ? `Summarise this transcript excerpt (part ${i + 1}/${chunks.length}). List every topic covered in order, with enough detail to reconstruct the ideas later. Aim for 500\u2013600 words:
+        lang === "en" ? "You are a precise summariser. Preserve every distinct topic and argument so nothing is lost when the summary is used to write an essay." : "\uB2F9\uC2E0\uC740 \uC815\uD655\uD55C \uC694\uC57D \uC804\uBB38\uAC00\uC785\uB2C8\uB2E4. \uC774\uD6C4 \uC5D0\uC138\uC774 \uC791\uC131\uC5D0 \uC4F0\uC77C \uC694\uC57D\uC774\uBBC0\uB85C \uBAA8\uB4E0 \uAC1C\uBCC4 \uC8FC\uC81C\uC640 \uB17C\uC810\uC774 \uC190\uC2E4 \uC5C6\uC774 \uBCF4\uC874\uB418\uC5B4\uC57C \uD569\uB2C8\uB2E4.",
+        lang === "en" ? `Summarise this transcript excerpt (part ${i + 1}/${chunks.length}). List every topic in order with enough detail to reconstruct the ideas later:
 
-${chunks[i]}` : `\uB2E4\uC74C \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uC870\uAC01(${i + 1}/${chunks.length}\uBC88\uC9F8)\uC744 \uC694\uC57D\uD558\uC138\uC694. \uB2E4\uB8E8\uB294 \uBAA8\uB4E0 \uC8FC\uC81C\uB97C \uC21C\uC11C\uB300\uB85C, \uB098\uC911\uC5D0 \uC7AC\uAD6C\uC131\uD560 \uC218 \uC788\uC744 \uB9CC\uD07C \uCDA9\uBD84\uD55C \uC138\uBD80 \uB0B4\uC6A9\uACFC \uD568\uAED8 \uC791\uC131\uD558\uC138\uC694. 600~800\uC790 \uBAA9\uD45C:
+${chunks[i]}` : `\uB2E4\uC74C \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8 \uC870\uAC01(${i + 1}/${chunks.length}\uBC88\uC9F8)\uC744 \uC21C\uC11C\uB300\uB85C, \uB098\uC911\uC5D0 \uC7AC\uAD6C\uC131 \uAC00\uB2A5\uD55C \uC218\uC900\uC73C\uB85C \uC694\uC57D\uD558\uC138\uC694:
 
 ${chunks[i]}`,
-        900
+        qp.chunkSummaryTokens
       );
       summaries.push(s);
     }
@@ -401,18 +437,21 @@ CONCLUSION:: \uC5D0\uC138\uC774 \uB9C8\uBB34\uB9AC \uBC29\uD5A5 (\uD55C \uBB38\u
 
 \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8:
 ${condensed}`;
-  const raw = await llmCall(cfg, SYS(lang), prompt, 4096);
-  return parseOutline(raw);
+  const raw = await llmCall(cfg, SYS(lang), prompt, qp.outlineMaxTokens);
+  const outline = parseOutline(raw);
+  if (outline.sections.length > qp.maxSections) {
+    outline.sections = outline.sections.slice(0, qp.maxSections);
+  }
+  return outline;
 }
-async function writeSection(cfg, lang, outline, index, fullTranscript, prevText) {
+async function writeSection(cfg, lang, outline, index, fullTranscript, prevText, qp) {
   var _a;
   const section = outline.sections[index];
   const n = outline.sections.length;
-  const excerptMax = 1e4;
   const sliceSize = Math.ceil(fullTranscript.length / n);
-  const overlap = Math.ceil(sliceSize * 0.15);
+  const overlap = Math.ceil(sliceSize * qp.overlapRatio);
   const start = Math.max(0, Math.floor(index / n * fullTranscript.length) - overlap);
-  const end = Math.min(start + excerptMax, fullTranscript.length);
+  const end = Math.min(start + qp.excerptMaxChars, fullTranscript.length);
   const excerpt = fullTranscript.slice(start, end);
   const prompt = lang === "en" ? `You are writing section ${index + 1} of ${n} for the Aeon essay titled "${outline.essayTitle}".
 
@@ -448,7 +487,8 @@ ${index === 0 ? "\uC77C\uC0C1\uC758 \uC7A5\uBA74\uC774\uB098 \uCCA0\uD559\uC801 
 \uC774 \uC139\uC158\uC758 \uD2B8\uB79C\uC2A4\uD06C\uB9BD\uD2B8:
 ${excerpt}`;
   const modelMax = (_a = MODEL_MAX_OUTPUT[cfg.model]) != null ? _a : 4096;
-  return (await llmCall(cfg, SYS(lang), prompt, modelMax)).trim();
+  const outTokens = qp.sectionOutputTokens > 0 ? Math.min(qp.sectionOutputTokens, modelMax) : modelMax;
+  return (await llmCall(cfg, SYS(lang), prompt, outTokens)).trim();
 }
 async function writeIntroOrConclusion(cfg, lang, outline, bodyText, type) {
   const prompt = lang === "en" ? type === "introduction" ? `Write the opening paragraph(s) for the Aeon essay "${outline.essayTitle}".
@@ -474,10 +514,11 @@ ${bodyText.slice(-2e3)}
 \uACB0\uB860 \uBCF8\uBB38\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uBC18\uB4DC\uC2DC \uC644\uC804\uD55C \uBB38\uC7A5\uC73C\uB85C \uB9C8\uBB34\uB9AC\uD558\uC138\uC694.`;
   return (await llmCall(cfg, SYS(lang), prompt, 2e3)).trim();
 }
-async function generateEssay(provider, apiKey, model, transcript, language, sourceTitle, onProgress) {
+async function generateEssay(provider, apiKey, model, transcript, language, sourceTitle, quality, onProgress) {
   const cfg = { provider, apiKey, model };
+  const qp = QUALITY_PARAMS[quality];
   const onStatus = (step) => onProgress({ step, current: 0, total: 100 });
-  const outline = await buildOutline(cfg, transcript, language, sourceTitle, onStatus);
+  const outline = await buildOutline(cfg, transcript, language, sourceTitle, qp, onStatus);
   const totalSteps = outline.sections.length + 2;
   let done = 0;
   const tick = (step) => {
@@ -491,7 +532,7 @@ async function generateEssay(provider, apiKey, model, transcript, language, sour
     tick(
       language === "en" ? `Writing section ${i + 1}/${outline.sections.length}: "${outline.sections[i].title}"` : `\uC139\uC158 ${i + 1}/${outline.sections.length} \uC791\uC131 \uC911: "${outline.sections[i].title}"`
     );
-    const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"));
+    const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"), qp);
     bodies.push(text);
   }
   tick(language === "en" ? "Writing conclusion\u2026" : "\uACB0\uB860 \uC791\uC131 \uC911\u2026");
@@ -574,6 +615,7 @@ var YoutubeEssayModal = class extends import_obsidian3.Modal {
     this.fileNameEl = null;
     this.plugin = plugin;
     this.language = plugin.settings.defaultLanguage;
+    this.quality = plugin.settings.defaultQuality;
     const active = this.app.workspace.getActiveFile();
     if (active && active.extension === "md") {
       this.selectedFile = active;
@@ -597,6 +639,9 @@ var YoutubeEssayModal = class extends import_obsidian3.Modal {
     );
     new import_obsidian3.Setting(contentEl).setName("Essay Style").addDropdown(
       (drop) => drop.addOption("ko", "\uD55C\uAD6D\uC5B4 \u2014 \uB274\uD544\uB85C\uC18C\uD37C \uC2A4\uD0C0\uC77C").addOption("en", "English \u2014 AEON style").setValue(this.language).onChange((v) => this.language = v)
+    );
+    new import_obsidian3.Setting(contentEl).setName("Quality / Cost").setDesc("\uC800\uBE44\uC6A9 \u2248 Haiku 10\uBD84/$0.01 | \uC911\uAC04 \u2248 $0.03\u20130.05 | \uACE0\uD488\uC9C8 \u2248 $0.08\u20130.15").addDropdown(
+      (drop) => drop.addOption("quick", "\u26A1 \uC800\uBE44\uC6A9 \u2014 \uC9E7\uC740 \uC601\uC0C1, \uBE60\uB984").addOption("balanced", "\u2696\uFE0F \uC911\uAC04\uBE44\uC6A9 \u2014 \uADE0\uD615 (\uAE30\uBCF8)").addOption("thorough", "\u{1F50D} \uACE0\uD488\uC9C8 \u2014 \uAE34 \uC601\uC0C1, \uC0C1\uC138 \uCEE4\uBC84\uB9AC\uC9C0").setValue(this.quality).onChange((v) => this.quality = v)
     );
     this.statusEl = contentEl.createEl("p");
     this.statusEl.style.cssText = "color:var(--text-muted); font-size:0.85em; min-height:1.2em; margin:4px 0;";
@@ -675,6 +720,7 @@ var YoutubeEssayModal = class extends import_obsidian3.Modal {
         transcript,
         this.language,
         sourceTitle,
+        this.quality,
         ({ step, current }) => this.setStatus(step, 5 + Math.round(current * 0.93))
       );
       await this.saveEssay(markdown, sourceTitle);

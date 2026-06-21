@@ -1,5 +1,5 @@
 import { requestUrl } from "obsidian";
-import type { ApiProvider } from "./settings";
+import type { ApiProvider, EssayQuality } from "./settings";
 
 export type EssayLanguage = "en" | "ko";
 
@@ -8,6 +8,46 @@ export interface EssayGenerationProgress {
   current: number;
   total: number;
 }
+
+// ---------------------------------------------------------------------------
+// Quality presets — controls cost vs coverage tradeoff
+// ---------------------------------------------------------------------------
+
+interface QualityParams {
+  excerptMaxChars:    number;   // transcript chars fed to each section
+  overlapRatio:       number;   // how much to overlap adjacent section windows
+  chunkSummaryTokens: number;   // max output tokens for each chunk summary
+  outlineMaxTokens:   number;   // max output tokens for outline generation
+  maxSections:        number;   // hard cap on number of body sections
+  sectionOutputTokens: number;  // max output tokens per section (0 = model max)
+}
+
+const QUALITY_PARAMS: Record<EssayQuality, QualityParams> = {
+  quick: {
+    excerptMaxChars:     5000,
+    overlapRatio:        0.10,
+    chunkSummaryTokens:  500,
+    outlineMaxTokens:    2048,
+    maxSections:         5,
+    sectionOutputTokens: 2500,
+  },
+  balanced: {
+    excerptMaxChars:     7500,
+    overlapRatio:        0.15,
+    chunkSummaryTokens:  700,
+    outlineMaxTokens:    3000,
+    maxSections:         8,
+    sectionOutputTokens: 5000,
+  },
+  thorough: {
+    excerptMaxChars:     10000,
+    overlapRatio:        0.15,
+    chunkSummaryTokens:  900,
+    outlineMaxTokens:    4096,
+    maxSections:         12,
+    sectionOutputTokens: 0,    // 0 = use model max
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Chunking helper
@@ -265,6 +305,7 @@ async function buildOutline(
   transcript: string,
   lang: EssayLanguage,
   sourceTitle: string,
+  qp: QualityParams,
   onStatus: (s: string) => void
 ): Promise<EssayOutline> {
   const chunks = chunkText(transcript, 24000);
@@ -282,12 +323,12 @@ async function buildOutline(
       const s = await llmCall(
         cfg,
         lang === "en"
-          ? "You are a precise summariser. Your goal is to preserve every distinct topic and argument so nothing is lost when the summary is later used to write an essay."
-          : "당신은 정확한 요약 전문가입니다. 이후 에세이 작성에 쓰일 요약이므로, 모든 개별 주제와 논점이 손실 없이 보존되어야 합니다.",
+          ? "You are a precise summariser. Preserve every distinct topic and argument so nothing is lost when the summary is used to write an essay."
+          : "당신은 정확한 요약 전문가입니다. 이후 에세이 작성에 쓰일 요약이므로 모든 개별 주제와 논점이 손실 없이 보존되어야 합니다.",
         lang === "en"
-          ? `Summarise this transcript excerpt (part ${i + 1}/${chunks.length}). List every topic covered in order, with enough detail to reconstruct the ideas later. Aim for 500–600 words:\n\n${chunks[i]}`
-          : `다음 트랜스크립트 조각(${i + 1}/${chunks.length}번째)을 요약하세요. 다루는 모든 주제를 순서대로, 나중에 재구성할 수 있을 만큼 충분한 세부 내용과 함께 작성하세요. 600~800자 목표:\n\n${chunks[i]}`,
-        900
+          ? `Summarise this transcript excerpt (part ${i + 1}/${chunks.length}). List every topic in order with enough detail to reconstruct the ideas later:\n\n${chunks[i]}`
+          : `다음 트랜스크립트 조각(${i + 1}/${chunks.length}번째)을 순서대로, 나중에 재구성 가능한 수준으로 요약하세요:\n\n${chunks[i]}`,
+        qp.chunkSummaryTokens
       );
       summaries.push(s);
     }
@@ -333,8 +374,13 @@ CONCLUSION:: 에세이 마무리 방향 (한 문장)
 트랜스크립트:
 ${condensed}`;
 
-  const raw = await llmCall(cfg, SYS(lang), prompt, 4096);
-  return parseOutline(raw);
+  const raw = await llmCall(cfg, SYS(lang), prompt, qp.outlineMaxTokens);
+  const outline = parseOutline(raw);
+  // Respect maxSections cap for the chosen quality preset
+  if (outline.sections.length > qp.maxSections) {
+    outline.sections = outline.sections.slice(0, qp.maxSections);
+  }
+  return outline;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,19 +393,16 @@ async function writeSection(
   outline: EssayOutline,
   index: number,
   fullTranscript: string,
-  prevText: string
+  prevText: string,
+  qp: QualityParams
 ): Promise<string> {
   const section = outline.sections[index];
   const n = outline.sections.length;
 
-  // Proportional slice with overlap: each section gets its share of the transcript
-  // plus a 10% buffer on each side so boundary content isn't dropped.
-  // Cap at 10000 chars to leave enough output budget.
-  const excerptMax = 10000;
-  const sliceSize  = Math.ceil(fullTranscript.length / n);
-  const overlap    = Math.ceil(sliceSize * 0.15);
+  const sliceSize = Math.ceil(fullTranscript.length / n);
+  const overlap   = Math.ceil(sliceSize * qp.overlapRatio);
   const start = Math.max(0, Math.floor((index / n) * fullTranscript.length) - overlap);
-  const end   = Math.min(start + excerptMax, fullTranscript.length);
+  const end   = Math.min(start + qp.excerptMaxChars, fullTranscript.length);
   const excerpt = fullTranscript.slice(start, end);
 
   const prompt =
@@ -395,9 +438,11 @@ ${index === 0 ? "일상의 장면이나 철학적 질문으로 에세이를 여�
 이 섹션의 트랜스크립트:
 ${excerpt}`;
 
-  // Request model's full output capacity to prevent mid-sentence cutoff
   const modelMax = MODEL_MAX_OUTPUT[cfg.model] ?? 4096;
-  return (await llmCall(cfg, SYS(lang), prompt, modelMax)).trim();
+  const outTokens = qp.sectionOutputTokens > 0
+    ? Math.min(qp.sectionOutputTokens, modelMax)
+    : modelMax;
+  return (await llmCall(cfg, SYS(lang), prompt, outTokens)).trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -454,13 +499,15 @@ export async function generateEssay(
   transcript: string,
   language: EssayLanguage,
   sourceTitle: string,
+  quality: EssayQuality,
   onProgress: (p: EssayGenerationProgress) => void
 ): Promise<string> {
   const cfg: LLMConfig = { provider, apiKey, model };
+  const qp = QUALITY_PARAMS[quality];
   const onStatus = (step: string) => onProgress({ step, current: 0, total: 100 });
 
   // ── 1. Outline ─────────────────────────────────────────────────────────────
-  const outline = await buildOutline(cfg, transcript, language, sourceTitle, onStatus);
+  const outline = await buildOutline(cfg, transcript, language, sourceTitle, qp, onStatus);
 
   const totalSteps = outline.sections.length + 2;
   let done = 0;
@@ -481,7 +528,7 @@ export async function generateEssay(
         ? `Writing section ${i + 1}/${outline.sections.length}: "${outline.sections[i].title}"`
         : `섹션 ${i + 1}/${outline.sections.length} 작성 중: "${outline.sections[i].title}"`
     );
-    const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"));
+    const text = await writeSection(cfg, language, outline, i, transcript, bodies.join("\n\n"), qp);
     bodies.push(text);
   }
 
