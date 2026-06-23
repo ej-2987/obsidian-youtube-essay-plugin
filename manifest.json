@@ -1,10 +1,10 @@
 {
-    "id":  "youtube-essay-generator",
-    "name":  "YouTube Essay Generator",
-    "version":  "1.0.0",
-    "minAppVersion":  "1.4.0",
-    "description":  "Generates AEON-style (English) or ?댄븘濡쒖냼??style (Korean) essays from YouTube videos",
-    "author":  "ej-2987",
-    "authorUrl":  "https://github.com/ej-2987/obsidian-youtube-essay-plugin",
-    "isDesktopOnly":  false
+    "id": "youtube-essay-generator",
+    "name": "YouTube Essay Generator",
+    "version": "1.4.0",
+    "minAppVersion": "1.4.0",
+    "description": "Generates AEON-style (English) or NewPhilosopher-style (Korean) essays from YouTube videos",
+    "author": "ej-2987",
+    "authorUrl": "https://github.com/ej-2987/obsidian-youtube-essay-plugin",
+    "isDesktopOnly": false
 }
